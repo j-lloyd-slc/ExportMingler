@@ -4,6 +4,26 @@ class ExportMingler {
 
     const dataDir = '/home/jlloyd/projects/ca/export-mingler/data/';
 
+    function parseFile($fileName) {
+        $keys = [];
+        $parsed = [];
+
+        if (($handle = fopen(self::dataDir . $fileName, "r")) !== FALSE) {
+            while (($data = fgetcsv($handle, 0, ",")) !== FALSE) {
+                if (!$keys) {
+                    $keys = $data;
+                    continue;
+                }
+                $parsed[] = array_combine($keys, $data);
+            }
+            fclose($handle);
+        }
+        //foreach ($keys as $key) {
+        //    echo $key . PHP_EOL;
+        //}
+        return($parsed);
+    }
+
     function parseAdditionalAttributes($data) {
         $parsedAdditionalAttributes = [];
         $attributes = explode(',', $data);
@@ -17,7 +37,7 @@ class ExportMingler {
         return $parsedAdditionalAttributes;
     }
 
-    function getExportCsv($fileName, $uniqueOriginalNames) {
+    function getExportCsv($fileName) {
         $keys = [];
         $parsed = [];
         if (($handle = fopen(self::dataDir . $fileName, "r")) !== FALSE) {
@@ -31,7 +51,7 @@ class ExportMingler {
                         $parsedLine = array_combine($keys, $data);
                         $parsedAdditionalAttributes = $this->parseAdditionalAttributes($parsedLine['additional_attributes']);
                         $parsedAttributes = array_merge($parsedLine, $parsedAdditionalAttributes);
-                        $parsed[$parsedAttributes['name']] = $parsedAttributes;
+                        $parsed[$parsedAttributes['sku']] = $parsedAttributes;
                     } else {
                         echo 'Bad Line: ' . PHP_EOL;
                         print_r($data);
@@ -42,55 +62,7 @@ class ExportMingler {
             }
             fclose($handle);
         }
-        $duplicateNames = [];
-        $names = [];
-        foreach ($parsed as $line) {
-            $name = strtolower($line['name']);
-            if (in_array($name, $names)) {
-                $duplicateNames[] = $name;
-            }
-            $names[] = $name;
-            if ($name == "the redemption of sarah cain") {
-                echo $name . PHP_EOL;
-            }
-        }
-        echo "Duplicate Export Names: " . count($duplicateNames) . PHP_EOL;
-        print_r($duplicateNames);
-        print_r(array_intersect($duplicateNames, $uniqueOriginalNames));
-        $data = [];
-        foreach ($parsed as $line) {
-            $name = strtolower($line['name']);
-            if (in_array($name, $uniqueOriginalNames)) {
-                if (!in_array($name, $duplicateNames)) {
-                    $data[$name] = $line;
-                }
-            }
-        }
-        return $data;
-    }
-
-    function getOriginalCsv($fileName) {
-        $keys = [];
-        $data = [];
-        if (($handle = fopen(self::dataDir . $fileName, "r")) !== FALSE) {
-            while (($line = fgetcsv($handle, 0, ",")) !== FALSE) {
-                if (!$keys) {
-                    $keys = $line;
-                    continue;
-                }
-                try {
-                    if (count($keys) == count($line)) {
-                        $data[] = array_combine($keys, $line);
-                    } else {
-                        echo 'Bad Line: ' . PHP_EOL;
-                        print_r($data);
-                    }
-                } catch (\Error $e) {
-                    print_r($data);
-                }            }
-            fclose($handle);
-        }
-        return $data;
+        return $parsed;
     }
 
     function writeCsv($data, $filename) {
@@ -106,81 +78,145 @@ class ExportMingler {
         fclose($csv);
     }
 
-    function parseExport($data, $storeOverrides, $configs) {
-        $parsedData = [];
-        foreach ($data as $row) {
-            $parsedRow = [];
-            foreach ($configs as $config) {
-                $attributeCode = $config['attributeCode'];
-                $meetsConditions = true;
-                if (array_key_exists('conditions', $config)) {
-                    foreach ($config['conditions'] as $conditionConfig) {
-                        if ($conditionConfig['type'] == 'store-view-override') {
-                            $sku = $row['sku'];
-                            if (array_key_exists($conditionConfig['storeViewCode'], $storeOverrides)) {
-                                $storeOverridesForStore = $storeOverrides[$conditionConfig['storeViewCode']];
-                                if (array_key_exists($sku, $storeOverridesForStore)) {
-                                    $storeOverridesForStoreAndSku =  $storeOverridesForStore[$sku];
-                                    if ($storeOverridesForStoreAndSku[$conditionConfig['attributeCode']] == $conditionConfig['neq']) {
-                                        $meetsConditions = false;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                    $value = "";
-                    if ($meetsConditions) {
-                        if (array_key_exists($attributeCode, $row)) {
-                            if ($value = $row[$attributeCode]) {
-                                $value = str_replace('[' . $attributeCode . ']', $value, $config['format']);
-                            }
-                        }
-                    }
-                    $parsedRow[$config['label']] = $value;
-            }
-            $parsedData[$parsedRow['sku']] = $parsedRow;
+    function getIsbnMap() {
+        $isbnData = $this->parseFile('Product-Table 1.csv');
+        $isbnMap = [];
+        foreach ($isbnData as $line) {
+            $isbnMap[strtolower($line['Title Id'])] = $line['ISBN'];
         }
-        return $parsedData;
+        return $isbnMap;
+    }
+
+    function getExportDataByIsbn($exportData) {
+        $byIsbn = [];
+        foreach ($exportData as $line) {
+            if (isset($line['isbn'])) {
+                $byIsbn[$line['isbn']] = $line;
+            }
+        }
+        return $byIsbn;
+    }
+
+    function getExportDataByTitle($exportData) {
+        $titles = [];
+        $duplicateTitles = [];
+        foreach ($exportData as $line) {
+            $title = strtolower($line['name']);
+            if (in_array($title, $titles)) {
+                $duplicateTitles[] = $title;
+            }
+            $titles[] = $title;
+        }
+
+        $byTitle = [];
+        foreach ($exportData as $line) {
+            $title = strtolower($line['name']);
+            if (!in_array($title, $duplicateTitles)) {
+                $byTitle[$title] = $line;
+            }
+        }
+        return $byTitle;
     }
 
     function mingle() {
-        $originalData = $this->getOriginalCsv('original.data.csv');
-        $uniqueOriginalNames = [];
-        foreach ($originalData as $line) {
-            $uniqueOriginalNames[] = strtolower($line['Title']);
+        $isbnMap = $this->getIsbnMap();
+        echo 'ISBN Map: ' . count($isbnMap) . PHP_EOL;
+
+        # Original Data
+        $originalData = $this->parseFile('Title-Table 1.csv');
+        $isbnNotFound = [];
+        $titles = [];
+        $duplicateTitles = [];
+        foreach ($originalData as &$line) {
+            $title = strtolower($line['Title']);
+            if (in_array($title, $titles)) {
+                $duplicateTitles[] = $title;
+            }
+            $titles[] = $title;
+            $titleId = strtolower($line['Title Id']);
+            if (array_key_exists($titleId, $isbnMap)) {
+                $line['ISBN'] = $isbnMap[$titleId];
+            } else {
+                $line['ISBN'] = null;
+                $isbnNotFound[] = $line['Title Id'];
+            }
         }
-        $uniqueOriginalNames = array_unique($uniqueOriginalNames);
-        echo 'Unique Titles: ' . count($uniqueOriginalNames) . PHP_EOL;
-        $exportData = $this->getExportCsv('export.data.csv', $uniqueOriginalNames);
-        echo 'Unique & Matched Export Data: ' . count($exportData) . PHP_EOL;
+        echo 'Duplicate Titles: ' . count($duplicateTitles) . PHP_EOL;
+        print_r($duplicateTitles);
+        $this->writeCsv($originalData, 'isbn-added.csv');
+
+        echo 'ISBNs not found: ' . count($isbnNotFound) . PHP_EOL;
+        print_r($isbnNotFound);
+
+        $exportData = $this->getExportCsv('ca.export_catalog_product_20240724_152240.csv');
+        //$exportData = $this->getExportCsv('abridged.csv');
+        $exportDataByIsbn = $this->getExportDataByIsbn($exportData);
+        $exportDataByTitle = $this->getExportDataByTitle($exportData);
         $keyMap = [
-            'Genre' => 'genre',
             'Author' => 'author',
             'Narrator' => 'narrator'
         ];
         $matches = [];
+        $skusMatched = [];
+        $isbnsMatched = [];
+        $titlesMatched = [];
         foreach ($originalData as &$originalLine) {
-            $name = strtolower($originalLine['Title']);
+            $isbn = isset($originalLine['ISBN']) ? strtolower($originalLine['ISBN']) : null;
+            $title = isset($originalLine['Title']) ? strtolower($originalLine['Title']) : null;
             $added = [];
-            if ($name && in_array($name, $uniqueOriginalNames)) {
-                if (isset($exportData[$name])) {
-                    $exportLine = $exportData[$name];
-                    $matches[] = 'Matched "' . $originalLine['Title'] . '" to "' . $exportLine['name'] . '"';
-                    foreach ($keyMap as $originalKey => $exportKey) {
-                        if (isset($exportLine[$exportKey])) {
-                            if (!$originalLine[$originalKey]) {
-                                $originalLine[$originalKey] = $exportLine[$exportKey];
-                                $added[] = $originalKey;
-                            }
+            $matchedOn = null;
+            if ($isbn && array_key_exists($isbn, $exportDataByIsbn)) {
+                $isbnsMatched[] = $isbn;
+                $exportLine = $exportDataByIsbn[$isbn];
+                $skusMatched[] = $exportLine['sku'];
+                $matches[] = 'Matched on ISBN: "' . $originalLine['Title'] . '" to "' . $exportLine['name'] . '"';
+                foreach ($keyMap as $originalKey => $exportKey) {
+                    if (isset($exportLine[$exportKey])) {
+                        if ($originalLine[$originalKey]) {
+                            echo 'Ovewritting ' . $originalKey . ' for ' . $originalLine['Title Id'] . PHP_EOL;
                         }
+                        //if (!$originalLine[$originalKey]) {
+                            $originalLine[$originalKey] = $exportLine[$exportKey];
+                            $matchedOn = "ISBN";
+                            $added[] = $originalKey;
+                        //}
+                    }
+                }
+                //$categories = explode(',', $exportLine['categories']);
+                //print_r($categories);
+            } else if ($title && !in_array($title, $duplicateTitles) && array_key_exists($title, $exportDataByTitle)) {
+                $titlesMatched[] = $title;
+                $exportLine = $exportDataByTitle[$title];
+                $skusMatched[] = $exportLine['sku'];
+                $matches[] = 'Matched on Title: "' . $originalLine['Title'] . '" to "' . $exportLine['name'] . '"';
+                foreach ($keyMap as $originalKey => $exportKey) {
+                    if (isset($exportLine[$exportKey])) {
+                        if ($originalLine[$originalKey]) {
+                            echo 'Ovewritting ' . $originalKey . ' for ' . $originalLine['Title Id'] . PHP_EOL;
+                        }
+                        //if (!$originalLine[$originalKey]) {
+                            $originalLine[$originalKey] = $exportLine[$exportKey];
+                            $matchedOn = "Title";
+                            $added[] = $originalKey;
+                        //}
                     }
                 }
             }
+            $originalLine['Matched On'] = $matchedOn;
             $originalLine['Added'] = implode(', ', $added);
         }
+
+        echo 'ISBNs matched: ' . count($isbnsMatched) . PHP_EOL;
+        print_r($isbnsMatched);
+
+        echo 'Titles matched: ' . count($titlesMatched) . PHP_EOL;
+        print_r($titlesMatched);
+
         echo 'MATCHES: ' . count($matches) . PHP_EOL;
         $this->writeCsv($originalData, 'updated.csv');
+
+        echo 'All Matches: ' . count($skusMatched) . PHP_EOL;
+        //echo '"' . implode('", "', $skusMatched) . '"' . PHP_EOL;
     }
 }
 
